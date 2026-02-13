@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Secrets / env
 .env
 .env.*
@@ -16,6 +15,7 @@ env/
 
 # Data / local artifacts
 data/
+secrets/
 
 # Logs
 *.log
@@ -27,7 +27,3 @@ data/
 
 # Local databases
 *.sqlite3
-
-=======
-
->>>>>>>

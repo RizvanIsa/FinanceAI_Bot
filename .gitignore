@@ -1,10 +1,33 @@
+<<<<<<< HEAD
+# Secrets / env
 .env
+.env.*
+.envrc
+
+# Python bytecode / cache
 __pycache__/
-*.pyc
+*.py[cod]
+
+# Virtual environments
 .venv/
 venv/
-.env.*
+ENV/
+env/
+
+# Data / local artifacts
 data/
+
+# Logs
 *.log
-*.json
+
+# OS / IDE
 .DS_Store
+.idea/
+.vscode/
+
+# Local databases
+*.sqlite3
+
+=======
+
+>>>>>>>

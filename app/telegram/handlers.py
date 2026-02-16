@@ -295,7 +295,7 @@ async def edit_waiting_date(
 
     raw = (message.text or "").strip()
     try:
-        dt = datetime.strptime(raw, "%d.%m.%Y")
+        dt = datetime.strptime(raw, "%Y-%m-%d")
     except Exception:
         await message.answer("Введите дату строго в формате DD.MM.YYYY, например: 09.02.2026")
         return

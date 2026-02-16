@@ -169,12 +169,6 @@ class JournalRepo:
         ]
         return self.client.batch_update_values(self.spreadsheet_id, updates)
     
-        def update_category(self, row_index: int, category: str) -> dict:
-            updates = [
-            (f"{self.sheet_name}!C{row_index}", [[category]]),
-        ]
-        return self.client.batch_update_values(self.spreadsheet_id, updates)
-
     def update_date_and_month_key(self, row_index: int, op_date: str, month_key: str) -> dict:
         # B = op_date, K = month_key
         updates = [

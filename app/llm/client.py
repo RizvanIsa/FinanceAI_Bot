@@ -28,23 +28,49 @@ class LLMClient:
     def chat_json(self, system: str, user: str) -> Dict[str, Any]:
         """
         Возвращает dict (JSON), который модель обязана выдать.
-
-        Мы просим: output ONLY JSON. Потом парсим.
+        Делаем 2 попытки:
+        1) с response_format (если провайдер поддерживает)
+        2) без response_format (fallback)
         """
         url = f"{self.base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
-        payload = {
+        base_payload = {
             "model": self.model,
             "temperature": 0,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            # Некоторые провайдеры поддерживают response_format, некоторые нет.
-            # Мы не зависим от этого, но можно включить - если поддерживается, станет еще надежнее.
-            "response_format": {"type": "json_object"},
         }
+
+        def _extract_json(resp_json: Dict[str, Any]) -> Dict[str, Any]:
+            try:
+                content = resp_json["choices"][0]["message"]["content"]
+            except Exception as e:
+                raise ValueError(f"LLM bad response shape: {resp_json}") from e
+
+            if content is None or str(content).strip() == "":
+                raise ValueError("LLM returned empty content")
+
+            try:
+                return json.loads(content)
+            except Exception as e:
+                raise ValueError(f"LLM returned non-JSON: {content}") from e
+
+        with httpx.Client(timeout=self.timeout_s) as client:
+            # Try 1: with response_format
+            payload = dict(base_payload)
+            payload["response_format"] = {"type": "json_object"}
+            try:
+                resp = client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                return _extract_json(resp.json())
+            except Exception:
+                # Try 2: without response_format
+                resp = client.post(url, headers=headers, json=base_payload)
+                resp.raise_for_status()
+                return _extract_json(resp.json())
 
         with httpx.Client(timeout=self.timeout_s) as client:
             resp = client.post(url, headers=headers, json=payload)

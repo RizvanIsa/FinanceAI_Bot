@@ -217,7 +217,7 @@ async def edit_select_row(
     await edit_render_actions(callback, journal_repo, state, row_index=row_index)
     await callback.answer()
 
-
+@router.callback_query(F.data.startswith("edit:action:"))
 async def edit_choose_action(
     callback: CallbackQuery,
     state: FSMContext,
@@ -238,7 +238,7 @@ async def edit_choose_action(
         await state.set_state(EditJournalStates.waiting_amount)
 
     elif action == "date":
-        await callback.message.edit_text("Введите новую дату в формате YYYY-MM-DD:")
+        await callback.message.edit_text("Введите новую дату в формате DD.MM.YYYY (например 09.02.2026):")
         await state.set_state(EditJournalStates.waiting_date)
 
     elif action == "category":
@@ -298,10 +298,17 @@ async def edit_waiting_date(
         return
 
     raw = (message.text or "").strip()
-    try:
-        dt = datetime.strptime(raw, "%Y-%m-%d")
-    except Exception:
-        await message.answer("Введите дату строго в формате YYYY-MM-DD, например: 2026-02-09")
+
+    dt = None
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(raw, fmt)
+            break
+        except Exception:
+            continue
+
+    if dt is None:
+        await message.answer("Введите дату в формате DD.MM.YYYY (например 09.02.2026)")
         return
 
     today = datetime.now()
@@ -464,14 +471,18 @@ async def any_text_handler(
             # если категория не найдена в справочнике - отправляем в pending
             op.status = "pending"
             op.needs_review = "TRUE"
+
+        # Если GPT отдал ok - проставляем category_id по справочнику.
         if op.status == "ok":
             cid = category_repo.find_id_by_name(op.category)
         if cid:
             op.category_id = cid
         else:
+            # Если GPT вернул категорию текстом, которая не совпала со справочником,
+            # переводим в pending - пользователь выберет из кнопок.
             op.status = "pending"
             op.needs_review = "TRUE"
-            
+            op.category = ""
     journal_repo.append_operation(op)
 
     if op.status == "pending":

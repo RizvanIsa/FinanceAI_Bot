@@ -72,11 +72,6 @@ class LLMClient:
                 resp.raise_for_status()
                 return _extract_json(resp.json())
 
-        with httpx.Client(timeout=self.timeout_s) as client:
-            resp = client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-
         content = data["choices"][0]["message"]["content"]
         try:
             return json.loads(content)

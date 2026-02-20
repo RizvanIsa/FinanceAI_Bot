@@ -104,16 +104,27 @@ class CategoryRepo:
             if cid and nm == target:
                 return cid
         return None
-    
+
     def seed_if_empty(self, rows: list[dict]) -> None:
         """
-        Если в листе только заголовок (или вообще пусто) - заливаем категории шаблона.
-        Используем append_row, потому что в SheetsClient нет update_values.
+        Если лист пустой или в нем только заголовок - заливаем категории шаблона.
         """
         existing = self.client.get_values(self.spreadsheet_id, self.sheet_name, "A:E")
-        if existing and len(existing) > 1:
+
+        # Лист совсем пустой -> создаем заголовок
+        if not existing:
+            self.client.append_row(
+                self.spreadsheet_id,
+                self.sheet_name,
+                ["category_id", "name", "section", "order", "is_active"],
+            )
+            existing = [["category_id", "name", "section", "order", "is_active"]]
+
+        # Если есть хотя бы одна строка данных кроме заголовка - ничего не делаем
+        if len(existing) > 1:
             return
 
+        # Заливаем шаблон
         for r in rows:
             self.client.append_row(
                 self.spreadsheet_id,

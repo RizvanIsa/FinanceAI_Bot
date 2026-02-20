@@ -301,7 +301,7 @@ async def edit_waiting_date(
     try:
         dt = datetime.strptime(raw, "%Y-%m-%d")
     except Exception:
-        await message.answer("Введите дату строго в формате YYYY-MM-DD, например: 09.02.2026")
+        await message.answer("Введите дату строго в формате YYYY-MM-DD, например: 2026-02-09")
         return
 
     today = datetime.now()
@@ -313,11 +313,10 @@ async def edit_waiting_date(
         await message.answer("Слишком старая дата. Можно править не дальше чем на 1 месяц назад.")
         return
 
-    op_date = dt.strftime("%d.%m.%Y")
+    op_date = dt.strftime("%Y-%m-%d")
     month_key = dt.strftime("%Y-%m")
-
     journal_repo.update_date_and_month_key(row_index=row_index, op_date=op_date, month_key=month_key)
-    await edit_flash_message(message, state, f"✅ Дата обновлена: <b>{op_date}</b>")
+    await edit_flash_message(message, state, f"✅ Дата обновлена: {op_date}")
     await edit_render_actions(message, journal_repo, state, row_index=row_index)
 
 
@@ -410,7 +409,6 @@ async def edit_done(
 # ----------------------------
 
 @router.message(F.text)
-@router.message(F.text)
 async def any_text_handler(
     message: Message,
     journal_repo: JournalRepo,
@@ -466,7 +464,14 @@ async def any_text_handler(
             # если категория не найдена в справочнике - отправляем в pending
             op.status = "pending"
             op.needs_review = "TRUE"
-
+        if op.status == "ok":
+            cid = category_repo.find_id_by_name(op.category)
+        if cid:
+            op.category_id = cid
+        else:
+            op.status = "pending"
+            op.needs_review = "TRUE"
+            
     journal_repo.append_operation(op)
 
     if op.status == "pending":

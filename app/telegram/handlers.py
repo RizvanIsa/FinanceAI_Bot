@@ -7,6 +7,7 @@ from typing import Optional
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     Message,
@@ -259,7 +260,7 @@ async def edit_choose_action(
     await callback.answer()
 
 
-@router.message(EditJournalStates.waiting_amount, F.text)
+@router.message(StateFilter(EditJournalStates.waiting_amount), F.text)
 async def edit_waiting_amount(
     message: Message,
     journal_repo: JournalRepo,
@@ -278,13 +279,14 @@ async def edit_waiting_amount(
         return
 
     amount = int(raw)
-    journal_repo.update_amount(row_index=row_index, amount=amount)
+    res = journal_repo.update_amount(row_index=row_index, amount=amount)
+    print("✅ edit update_amount:", res)
 
     await edit_flash_message(message, state, f"✅ Сумма обновлена: <b>{amount}</b> ₽")
     await edit_render_actions(message, journal_repo, state, row_index=row_index)
 
 
-@router.message(EditJournalStates.waiting_date, F.text)
+@router.message(StateFilter(EditJournalStates.waiting_date), F.text)
 async def edit_waiting_date(
     message: Message,
     journal_repo: JournalRepo,
@@ -322,7 +324,9 @@ async def edit_waiting_date(
 
     op_date = dt.strftime("%Y-%m-%d")
     month_key = dt.strftime("%Y-%m")
-    journal_repo.update_date_and_month_key(row_index=row_index, op_date=op_date, month_key=month_key)
+    res = journal_repo.update_date_and_month_key(row_index=row_index, op_date=op_date, month_key=month_key)
+    print("✅ edit update_date:", res)
+    
     await edit_flash_message(message, state, f"✅ Дата обновлена: {op_date}")
     await edit_render_actions(message, journal_repo, state, row_index=row_index)
 
@@ -475,14 +479,12 @@ async def any_text_handler(
         # Если GPT отдал ok - проставляем category_id по справочнику.
         if op.status == "ok":
             cid = category_repo.find_id_by_name(op.category)
-        if cid:
-            op.category_id = cid
-        else:
-            # Если GPT вернул категорию текстом, которая не совпала со справочником,
-            # переводим в pending - пользователь выберет из кнопок.
-            op.status = "pending"
-            op.needs_review = "TRUE"
-            op.category = ""
+            if cid:
+                op.category_id = cid
+            else:
+                op.status = "pending"
+                op.needs_review = "TRUE"
+                op.category = ""
     journal_repo.append_operation(op)
 
     if op.status == "pending":
@@ -581,6 +583,17 @@ async def any_voice_handler(
                 f"Отправьте сумму текстом или запишите голосовое еще раз."
             )
             return
+
+        # Если GPT отдал ok - проставляем category_id по справочнику
+        if op.status == "ok":
+            cid = category_repo.find_id_by_name(op.category)
+            if cid:
+                op.category_id = cid
+            else:
+                # GPT вернул категорию, которой нет в справочнике -> pending
+                op.status = "pending"
+                op.needs_review = "TRUE"
+                op.category = ""
 
         journal_repo.append_operation(op)
 

@@ -35,7 +35,7 @@ class LLMClient:
         url = f"{self.base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
-        base_payload = {
+        base_payload: Dict[str, Any] = {
             "model": self.model,
             "temperature": 0,
             "messages": [
@@ -71,9 +71,3 @@ class LLMClient:
                 resp = client.post(url, headers=headers, json=base_payload)
                 resp.raise_for_status()
                 return _extract_json(resp.json())
-
-        content = data["choices"][0]["message"]["content"]
-        try:
-            return json.loads(content)
-        except Exception as e:
-            raise ValueError(f"LLM returned non-JSON: {content}") from e

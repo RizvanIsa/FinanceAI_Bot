@@ -1,20 +1,19 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.data.categories import CATEGORY_CODES, CATEGORY_MAP
+from app.sheets.category_repo import Category
 
 
-def build_categories_keyboard(prefix: str = "cat:") -> InlineKeyboardMarkup:
+def build_categories_keyboard(categories: list[Category], prefix: str = "cat:") -> InlineKeyboardMarkup:
     """
     Inline-кнопки категорий.
-    callback_data хранит КОРОТКИЙ код (чтобы не словить лимит Telegram).
-
+    callback_data хранит category_id.
     prefix:
-      - "cat:"     для pending
+      - "cat:" для pending
       - "editcat:" для /edit
     """
     buttons = [
-        InlineKeyboardButton(text=CATEGORY_MAP[code], callback_data=f"{prefix}{code}")
-        for code in CATEGORY_CODES
+        InlineKeyboardButton(text=c.name, callback_data=f"{prefix}{c.category_id}")
+        for c in categories
     ]
 
     rows = []

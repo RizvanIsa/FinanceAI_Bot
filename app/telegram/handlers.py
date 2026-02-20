@@ -24,6 +24,8 @@ from app.services.transcribe_service import WhisperTranscriber
 from app.sheets.journal_repo import JournalRepo
 from app.telegram.keyboards import build_categories_keyboard
 from app.telegram.states import EditJournalStates
+from app.sheets.category_repo import CategoryRepo
+from app.sheets.journal_repo import JournalRepo
 
 router = Router()
 
@@ -216,10 +218,11 @@ async def edit_select_row(
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("edit:action:"))
 async def edit_choose_action(
     callback: CallbackQuery,
     state: FSMContext,
+    journal_repo: JournalRepo,
+    category_repo: CategoryRepo,
 ) -> None:
     action = (callback.data or "").split(":")[-1]
     data = await state.get_data()
@@ -235,22 +238,23 @@ async def edit_choose_action(
         await state.set_state(EditJournalStates.waiting_amount)
 
     elif action == "date":
-        await callback.message.edit_text("Введите новую дату в формате DD.MM.YYYY:")
+        await callback.message.edit_text("Введите новую дату в формате YYYY-MM-DD:")
         await state.set_state(EditJournalStates.waiting_date)
 
     elif action == "category":
+        categories = category_repo.list_active()
         await callback.message.edit_text(
             "Выберите новую категорию:",
-            reply_markup=build_categories_keyboard(prefix="editcat:"),
+            reply_markup=build_categories_keyboard(categories, prefix="editcat:"),
         )
         await state.set_state(EditJournalStates.choosing_category)
 
     elif action == "cancel":
-        await callback.message.edit_text(
+            await callback.message.edit_text(
             "Вы уверены, что хотите отменить запись?",
             reply_markup=build_edit_cancel_confirm_keyboard(),
         )
-        await state.set_state(EditJournalStates.confirming_cancel)
+    await state.set_state(EditJournalStates.confirming_cancel)
 
     await callback.answer()
 
@@ -297,7 +301,7 @@ async def edit_waiting_date(
     try:
         dt = datetime.strptime(raw, "%Y-%m-%d")
     except Exception:
-        await message.answer("Введите дату строго в формате DD.MM.YYYY, например: 09.02.2026")
+        await message.answer("Введите дату строго в формате YYYY-MM-DD, например: 09.02.2026")
         return
 
     today = datetime.now()
@@ -317,18 +321,17 @@ async def edit_waiting_date(
     await edit_render_actions(message, journal_repo, state, row_index=row_index)
 
 
-
 @router.callback_query(F.data.startswith("editcat:"))
 async def edit_category_pick(
     callback: CallbackQuery,
     journal_repo: JournalRepo,
+    category_repo: CategoryRepo,
     state: FSMContext,
 ) -> None:
-    code = (callback.data or "").split("editcat:", 1)[1].strip()
+    category_id = (callback.data or "").split("editcat:", 1)[1].strip()
 
-    from app.data.categories import CATEGORY_MAP
-
-    if code not in CATEGORY_MAP:
+    category_name = category_repo.get_name_by_id(category_id)
+    if not category_name:
         await callback.answer("Неизвестная категория", show_alert=True)
         return
 
@@ -339,11 +342,9 @@ async def edit_category_pick(
         await state.clear()
         return
 
-    category = CATEGORY_MAP[code]
-    journal_repo.update_category(row_index=row_index, category=category)
-    await edit_flash_message(callback, state, f"✅ Категория обновлена: <b>{category}</b>")
-    await edit_render_actions(callback, journal_repo, state, row_index=row_index)
+    journal_repo.update_category(row_index=row_index, category=category_name, category_id=category_id)
 
+    await edit_flash_message(callback, state, f"✅ Категория обновлена: <b>{category_name}</b>")
     await edit_render_actions(callback, journal_repo, state, row_index=row_index)
     await callback.answer("Готово ✅")
 
@@ -409,11 +410,13 @@ async def edit_done(
 # ----------------------------
 
 @router.message(F.text)
+@router.message(F.text)
 async def any_text_handler(
     message: Message,
     journal_repo: JournalRepo,
-    llm: Optional[LLMClient],
+    category_repo: CategoryRepo,
     state: FSMContext,
+    llm: Optional[LLMClient],
 ) -> None:
     # Если пользователь в режиме /edit - не принимаем как новую операцию
     if await state.get_state() is not None:
@@ -455,11 +458,23 @@ async def any_text_handler(
             tg_message_id=tg_message_id,
             source="text",
         )
+    if op.status == "ok":
+        cid = category_repo.find_id_by_name(op.category)
+        if cid:
+            op.category_id = cid
+        else:
+            # если категория не найдена в справочнике - отправляем в pending
+            op.status = "pending"
+            op.needs_review = "TRUE"
 
     journal_repo.append_operation(op)
 
     if op.status == "pending":
-        await message.answer("Уточните категорию:", reply_markup=build_categories_keyboard())
+        categories = category_repo.list_active()
+        await message.answer(
+            "Уточните категорию:",
+            reply_markup=build_categories_keyboard(categories),
+        )
         return
 
     await message.answer(f"Записал ✅ {op.op_date} · {op.category} · {op.amount} ₽")
@@ -473,6 +488,7 @@ async def any_text_handler(
 async def any_voice_handler(
     message: Message,
     journal_repo: JournalRepo,
+    category_repo: CategoryRepo,
     llm: Optional[LLMClient],
     transcriber: Optional[WhisperTranscriber],
 ) -> None:
@@ -553,9 +569,10 @@ async def any_voice_handler(
         journal_repo.append_operation(op)
 
         if op.status == "pending":
+            categories = category_repo.list_active()
             await message.answer(
                 f"Распознал: \"{text}\".\nУточните категорию:",
-                reply_markup=build_categories_keyboard(),
+                reply_markup=build_categories_keyboard(categories),
             )
             return
 
@@ -577,17 +594,16 @@ async def any_voice_handler(
 async def category_callback_handler(
     callback: CallbackQuery,
     journal_repo: JournalRepo,
+    category_repo: CategoryRepo,
 ) -> None:
     data = callback.data or ""
-    code = data.split("cat:", 1)[1].strip()
+    category_id = data.split("cat:", 1)[1].strip()
 
-    from app.data.categories import CATEGORY_MAP
-
-    if code not in CATEGORY_MAP:
+    category_name = category_repo.get_name_by_id(category_id)
+    if not category_name:
         await callback.answer("Неизвестная категория", show_alert=True)
         return
 
-    category = CATEGORY_MAP[code]
     tg_user_id = callback.from_user.id if callback.from_user else 0
 
     row_index = journal_repo.find_last_pending_row(tg_user_id=tg_user_id)
@@ -600,7 +616,7 @@ async def category_callback_handler(
     op_date = summary.get("op_date", "")
     amount = summary.get("amount", "")
 
-    journal_repo.update_pending_category(row_index=row_index, category=category)
+    journal_repo.update_pending_category(row_index=row_index, category=category_name, category_id=category_id)
 
     await callback.answer()
 
@@ -610,4 +626,4 @@ async def category_callback_handler(
     except Exception:
         pass
 
-    await callback.message.answer(f"Записал ✅ {op_date} · {category} · {amount} ₽")
+    await callback.message.answer(f"Записал ✅ {op_date} · {category_name} · {amount} ₽")

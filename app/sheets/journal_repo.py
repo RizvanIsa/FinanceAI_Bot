@@ -26,18 +26,19 @@ class JournalRepo:
         Добавляет операцию в конец таблицы.
         """
         row = [
-            op.created_at,
-            op.op_date,
-            op.category,
-            op.amount,
-            op.comment_raw,
-            op.source,
-            op.tg_user_id,
-            op.tg_message_id,
-            op.status,
-            op.needs_review,
-            op.month_key,
-            op.error or "",
+        op.created_at,      # A
+        op.op_date,         # B
+        op.category,        # C
+        op.amount,          # D
+        op.comment_raw,     # E
+        op.source,          # F
+        op.tg_user_id,      # G
+        op.tg_message_id,   # H
+        op.status,          # I
+        op.needs_review,    # J
+        op.month_key,       # K
+        op.error or "",     # L
+        op.category_id,     # M
         ]
         return self.client.append_row(self.spreadsheet_id, self.sheet_name, row)
 
@@ -64,7 +65,7 @@ class JournalRepo:
         - status (колонка I) == "pending"
         Возвращает номер строки (например 15) или None.
         """
-        rows = self.client.get_values(self.spreadsheet_id, self.sheet_name, "A:L")
+        rows = self.client.get_values(self.spreadsheet_id, self.sheet_name, "A:M")
         last_row_index: Optional[int] = None
 
         for i, row in enumerate(rows[1:], start=2):  # начинаем со строки 2
@@ -79,15 +80,13 @@ class JournalRepo:
 
         return last_row_index
 
-    def update_pending_category(self, row_index: int, category: str) -> dict:
+    def update_pending_category(self, row_index: int, category: str, category_id: str) -> dict:
         """
-        Обновляет category, status и needs_review у конкретной строки.
-        - category (колонка C)
-        - status (колонка I)
-        - needs_review (колонка J)
+        Обновляет category (C), category_id (M), status (I), needs_review (J).
         """
         updates = [
             (f"{self.sheet_name}!C{row_index}", [[category]]),
+            (f"{self.sheet_name}!M{row_index}", [[category_id]]),
             (f"{self.sheet_name}!I{row_index}", [["ok"]]),
             (f"{self.sheet_name}!J{row_index}", [["FALSE"]]),
         ]
@@ -95,12 +94,12 @@ class JournalRepo:
 
     def get_row(self, row_index: int) -> list[str]:
         """
-        Возвращает значения строки A:L как список (может быть короче 12, если справа пусто).
+        Возвращает значения строки A:M как список (может быть короче 12, если справа пусто).
         """
         rows = self.client.get_values(
             self.spreadsheet_id,
             self.sheet_name,
-            f"A{row_index}:L{row_index}",
+            f"A{row_index}:M{row_index}",
         )
         if not rows:
             return []
@@ -124,7 +123,7 @@ class JournalRepo:
         [(row_index, "09.02.2026 · Продукты · 3000"), ...]
         Берем только status == "ok" (canceled игнорим).
         """
-        rows = self.client.get_values(self.spreadsheet_id, self.sheet_name, "A:L")
+        rows = self.client.get_values(self.spreadsheet_id, self.sheet_name, "A:M")
         if not rows or len(rows) < 2:
             return []
 
@@ -185,13 +184,13 @@ class JournalRepo:
         ]
         return self.client.batch_update_values(self.spreadsheet_id, updates)
 
-    def update_category(self, row_index: int, category: str) -> dict:
+    def update_category(self, row_index: int, category: str, category_id: str) -> dict:
         """
-        Обновляет category у конкретной строки.
-        C = category
+        Обновляет category (C) и category_id (M) у конкретной строки.
         """
         updates = [
             (f"{self.sheet_name}!C{row_index}", [[category]]),
+            (f"{self.sheet_name}!M{row_index}", [[category_id]]),
         ]
         return self.client.batch_update_values(self.spreadsheet_id, updates)
 

@@ -7,7 +7,8 @@ from app.sheets.oauth_client import get_credentials
 from app.telegram.bot import build_bot, build_dispatcher
 from app.telegram.handlers import router
 from app.services.transcribe_service import WhisperTranscriber
-
+from app.sheets.category_repo import CategoryRepo
+from app.llm.client import LLMClient
 
 async def main() -> None:
     settings = get_settings()
@@ -26,9 +27,16 @@ async def main() -> None:
         settings.google_sheets_journal_sheet_name,
     )
 
+    category_repo = CategoryRepo(
+    sheets_client,
+    settings.google_sheets_spreadsheet_id,
+    sheet_name="Категории",
+    )
+    dp.workflow_data["category_repo"] = category_repo
+
     # Передаем repo в aiogram workflow_data, чтобы хендлеры могли его получить через DI
     dp.workflow_data["journal_repo"] = journal_repo
-    from app.llm.client import LLMClient
+   
 
     llm = None
     try:

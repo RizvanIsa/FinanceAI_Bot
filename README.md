@@ -149,6 +149,34 @@ WHISPER_MODEL=whisper-1
 
 ---
 
+## Вспомогательные скрипты (отладка и проверки)
+
+В папке `scripts/` лежат небольшие утилиты для проверки интеграции с Google Sheets и репозиториями.  
+Запускаются они из корня проекта (`c:\finbot`) командами вида `python scripts/<имя_скрипта>.py`.
+
+- `scripts/smoke_test.py`  
+  Простая проверка, что бот может писать в лист “Журнал”.
+
+  ```bash
+  python scripts/smoke_test.py
+  ```
+
+- `scripts/debug_list_sheets.py`  
+  Выводит список листов в текущем Spreadsheet (помогает убедиться, что ID таблицы верный и доступ есть).
+
+  ```bash
+  python scripts/debug_list_sheets.py
+  ```
+
+- `scripts/journal_repo_test.py`  
+  Интеграционный тест для `JournalRepo`: добавляет `pending`‑операцию, находит её и обновляет категорию.
+
+  ```bash
+  python scripts/journal_repo_test.py
+  ```
+
+---
+
 ## Как это работает на уровне потока
 
 1. Пользователь отправляет текст или голосовое сообщение боту в Telegram.

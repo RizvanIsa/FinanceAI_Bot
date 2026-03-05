@@ -35,7 +35,12 @@ async def main() -> None:
         settings.google_sheets_spreadsheet_id,
         sheet_name="Категории",
     )
-    category_repo.seed_if_empty(DEFAULT_TEMPLATE)
+    try:
+        category_repo.seed_if_empty(DEFAULT_TEMPLATE)
+    except Exception as e:
+        # Не падаем, если недоступен Google Sheets при старте.
+        # Категории уже могут быть созданы ранее; бот продолжит работу.
+        print("⚠️ CategoryRepo seed_if_empty failed:", repr(e))
     dp.workflow_data["category_repo"] = category_repo
 
     # --- LLM wiring ---

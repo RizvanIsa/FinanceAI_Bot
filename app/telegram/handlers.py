@@ -16,6 +16,7 @@ from aiogram.types import (
     InlineKeyboardButton,
 )
 
+from app.event_log import log_event
 from app.llm.client import LLMClient
 from app.services.ingest_service import (
     build_pending_operation_from_text,
@@ -24,8 +25,9 @@ from app.services.ingest_service import (
 from app.services.transcribe_service import WhisperTranscriber
 from app.sheets.journal_repo import JournalRepo
 from app.telegram.keyboards import build_categories_keyboard
-from app.telegram.states import EditJournalStates
+from app.telegram.states import EditJournalStates, FeedbackStates
 from app.sheets.category_repo import CategoryRepo
+from app.feedback import append_feedback_entry
 
 router = Router()
 
@@ -202,6 +204,8 @@ async def edit_render_actions(
 
 @router.message(CommandStart())
 async def start_handler(message: Message) -> None:
+    tg_user_id = message.from_user.id if message.from_user else 0
+    log_event(f"Пользователь {tg_user_id} открыл бота командой /start.")
     await message.answer(
         "👋 Привет! Я Finbot.\n\n"
         "Помогаю вести учёт личных финансов в Google Sheets прямо из этого чата.\n\n"
@@ -214,6 +218,8 @@ async def start_handler(message: Message) -> None:
 
 @router.message(Command("help"))
 async def help_handler(message: Message) -> None:
+    tg_user_id = message.from_user.id if message.from_user else 0
+    log_event(f"Пользователь {tg_user_id} запросил помощь (/help).")
     text = (
         "<b>Finbot — учёт личных финансов в Google Sheets</b>\n\n"
         "Я записываю ваши доходы и расходы в таблицу. Что я умею:\n\n"
@@ -233,6 +239,45 @@ async def help_handler(message: Message) -> None:
     await message.answer(text, parse_mode="HTML")
 
 
+@router.message(Command("feedback"))
+async def feedback_command(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(FeedbackStates.waiting_text)
+    await message.answer(
+        "Опишите, пожалуйста, что пошло не так или какую ошибку вы увидели. "
+        "Я сохраню запись и приложу последние строки логов для анализа."
+    )
+
+
+@router.message(StateFilter(FeedbackStates.waiting_text), F.text)
+async def feedback_capture(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Напишите, пожалуйста, суть ошибки или пожелание.")
+        return
+
+    user = message.from_user
+    tg_user_id = user.id if user else 0
+    username = None
+    if user:
+        raw_name = " ".join(filter(None, [user.first_name, user.last_name]))
+        username = user.username or raw_name or None
+
+    recent_events = append_feedback_entry(user_id=tg_user_id, username=username, description=text)
+    snippet_hint = text if len(text) <= 80 else f"{text[:77]}..."
+    log_event(f"Пользователь {tg_user_id} отправил фидбек: {snippet_hint}")
+
+    await message.answer(
+        "Спасибо, описание сохранено в `logs/feedback.log`. Мы приложили последние записи логов и разберёмся.",
+        parse_mode="Markdown",
+    )
+
+    if recent_events:
+        snippet = "\n".join(recent_events[-5:])
+        await message.answer(f"Последние события:\n```\n{snippet}\n```", parse_mode="Markdown")
+
+    await state.clear()
+
 # ----------------------------
 # /edit flow
 # ----------------------------
@@ -245,6 +290,7 @@ async def edit_menu_entry(
 ) -> None:
     tg_user_id = message.from_user.id if message.from_user else 0
     rows = journal_repo.list_last_rows_for_user(tg_user_id=tg_user_id, limit=10)
+    log_event(f"Пользователь {tg_user_id} открыл /edit. Найдено записей: {len(rows)}.")
 
     if not rows:
         await message.answer("Не нашел ваших записей для редактирования.")
@@ -269,6 +315,8 @@ async def edit_select_row(
 ) -> None:
     data = callback.data or ""
     row_index = int(data.split(":")[-1])
+    tg_user_id = callback.from_user.id if callback.from_user else 0
+    log_event(f"Пользователь {tg_user_id} выбрал запись #{row_index} для редактирования.")
 
     # фиксируем menu message id, чтобы дальше всегда редактировать одно и то же сообщение
     await state.update_data(
@@ -295,6 +343,9 @@ async def edit_choose_action(
         await callback.answer()
         await state.clear()
         return
+
+    tg_user_id = callback.from_user.id if callback.from_user else 0
+    log_event(f"Пользователь {tg_user_id} выбрал действие '{action}' для записи #{row_index}.")
 
     if action == "amount":
         await callback.message.edit_text("Введите новую сумму числом:")
@@ -338,14 +389,16 @@ async def edit_waiting_amount(
         await state.clear()
         return
 
+    tg_user_id = message.from_user.id if message.from_user else 0
     raw = (message.text or "").strip().replace(" ", "")
     if not raw.isdigit():
         await message.answer("Введите сумму числом, например: 3000")
+        log_event(f"Пользователь {tg_user_id} ввел некорректную сумму при /edit: '{raw}'.")
         return
 
     amount = int(raw)
-    res = journal_repo.update_amount(row_index=row_index, amount=amount)
-    print("✅ edit update_amount:", res)
+    journal_repo.update_amount(row_index=row_index, amount=amount)
+    log_event(f"Пользователь {tg_user_id} обновил сумму у записи #{row_index}: {amount} ₽.")
 
     await edit_replace_with_success_then_actions(
         message=message,
@@ -370,6 +423,7 @@ async def edit_waiting_date(
         await state.clear()
         return
 
+    tg_user_id = message.from_user.id if message.from_user else 0
     raw = (message.text or "").strip()
 
     dt = None
@@ -382,21 +436,24 @@ async def edit_waiting_date(
 
     if dt is None:
         await message.answer("Введите дату в формате DD.MM.YYYY (например 09.02.2026)")
+        log_event(f"Пользователь {tg_user_id} ввел некорректную дату при /edit: '{raw}'.")
         return
 
     today = datetime.now()
     if dt.date() > today.date():
         await message.answer("Дата в будущем. Введите дату не позже сегодняшней.")
+        log_event(f"Пользователь {tg_user_id} ввел дату из будущего при /edit: '{raw}'.")
         return
 
     if dt < (today - timedelta(days=31)):
         await message.answer("Слишком старая дата. Можно править не дальше чем на 1 месяц назад.")
+        log_event(f"Пользователь {tg_user_id} ввел слишком старую дату при /edit: '{raw}'.")
         return
 
     op_date = dt.strftime("%Y-%m-%d")
     month_key = dt.strftime("%Y-%m")
-    res = journal_repo.update_date_and_month_key(row_index=row_index, op_date=op_date, month_key=month_key)
-    print("✅ edit update_date:", res)
+    journal_repo.update_date_and_month_key(row_index=row_index, op_date=op_date, month_key=month_key)
+    log_event(f"Пользователь {tg_user_id} обновил дату у записи #{row_index}: {op_date}.")
 
     await edit_replace_with_success_then_actions(
         message=message,
@@ -430,6 +487,8 @@ async def edit_category_pick(
         return
 
     journal_repo.update_category(row_index=row_index, category=category_name, category_id=category_id)
+    tg_user_id = callback.from_user.id if callback.from_user else 0
+    log_event(f"Пользователь {tg_user_id} обновил категорию у записи #{row_index}: {category_name}.")
 
     await edit_flash_message(callback, state, f"✅ Категория обновлена: <b>{category_name}</b>")
     await edit_render_actions(callback, journal_repo, state, row_index=row_index)
@@ -451,6 +510,8 @@ async def edit_confirm_cancel(
         return
 
     journal_repo.cancel_row(row_index=row_index)
+    tg_user_id = callback.from_user.id if callback.from_user else 0
+    log_event(f"Пользователь {tg_user_id} отменил запись #{row_index} через /edit.")
 
     # покажем текстом и выйдем из режима /edit
     await callback.message.edit_text("Запись отменена ✅")
@@ -489,6 +550,8 @@ async def edit_done(
     except Exception:
         pass
 
+    tg_user_id = callback.from_user.id if callback.from_user else 0
+    log_event(f"Пользователь {tg_user_id} завершил режим /edit.")
     await callback.answer()
 
 
@@ -514,9 +577,11 @@ async def any_text_handler(
 
     tg_user_id = message.from_user.id if message.from_user else 0
     tg_message_id = message.message_id
+    log_event(f"Получено текстовое сообщение от пользователя {tg_user_id}: '{text}'.")
 
     if journal_repo.is_duplicate(tg_message_id):
         await message.answer("Это сообщение уже записано. Дубль пропущен ✅")
+        log_event(f"Сообщение пользователя {tg_user_id} пропущено как дубль.")
         return
 
     # пробуем GPT, но без риска упасть
@@ -534,9 +599,11 @@ async def any_text_handler(
 
     except Exception as e:
         if isinstance(e, RuntimeError) and "LLM disabled" in str(e):
-            print("ℹ️ LLM выключен: pending-first")
+            log_event(f"LLM выключен. Сообщение пользователя {tg_user_id} ушло в pending.")
         else:
-            print("⚠️ LLM error, fallback to pending:", repr(e))
+            log_event(
+                f"Ошибка LLM для пользователя {tg_user_id}. Использован pending-режим: {repr(e)}"
+            )
 
         op = build_pending_operation_from_text(
             text=text,
@@ -566,12 +633,18 @@ async def any_text_handler(
 
     if op.status == "pending":
         categories = category_repo.list_active()
+        log_event(
+            f"Операция пользователя {tg_user_id} сохранена как pending. Ожидается выбор категории."
+        )
         await message.answer(
             "Уточните категорию:",
             reply_markup=build_categories_keyboard(categories),
         )
         return
 
+    log_event(
+        f"Операция пользователя {tg_user_id} сохранена: {op.op_date}, {op.category}, {op.amount} ₽."
+    )
     await message.answer(f"Записал ✅ {op.op_date} · {op.category} · {op.amount} ₽")
 
 
@@ -589,9 +662,11 @@ async def any_voice_handler(
 ) -> None:
     tg_user_id = message.from_user.id if message.from_user else 0
     tg_message_id = message.message_id
+    log_event(f"Получено голосовое сообщение от пользователя {tg_user_id}.")
 
     if journal_repo.is_duplicate(tg_message_id):
         await message.answer("Это голосовое сообщение уже записано. Дубль пропущен ✅")
+        log_event(f"Голосовое сообщение пользователя {tg_user_id} пропущено как дубль.")
         return
 
     tmp_dir = "app/tmp"
@@ -609,13 +684,14 @@ async def any_voice_handler(
                 "Распознавание голоса недоступно. "
                 "Отправьте сумму текстом или запишите голосовое еще раз."
             )
+            log_event("Распознавание голоса недоступно: модуль transcriber не инициализирован.")
             return
 
         try:
             tr = transcriber.transcribe_ogg(file_path)
             text = tr.text.strip()
         except Exception as e:
-            print("⚠️ Whisper error:", repr(e))
+            log_event(f"Ошибка распознавания голоса у пользователя {tg_user_id}: {repr(e)}")
             await message.answer(
                 "Не удалось распознать голос. "
                 "Отправьте сумму текстом или запишите голосовое еще раз."
@@ -627,6 +703,7 @@ async def any_voice_handler(
                 "Не удалось распознать голос. "
                 "Отправьте сумму текстом или запишите голосовое еще раз."
             )
+            log_event(f"Голос пользователя {tg_user_id} не удалось распознать в текст.")
             return
 
         try:
@@ -641,7 +718,10 @@ async def any_voice_handler(
                 source="voice",
             )
         except Exception as e:
-            print("⚠️ LLM error, fallback to pending:", repr(e))
+            log_event(
+                f"Ошибка LLM для голосового сообщения пользователя {tg_user_id}. "
+                f"Использован pending-режим: {repr(e)}"
+            )
             op = build_pending_operation_from_text(
                 text=text,
                 tg_user_id=tg_user_id,
@@ -658,6 +738,9 @@ async def any_voice_handler(
             await message.answer(
                 f"Распознал: \"{text}\", но не нашел сумму.\n"
                 f"Отправьте сумму текстом или запишите голосовое еще раз."
+            )
+            log_event(
+                f"После распознавания голоса у пользователя {tg_user_id} не найдена сумма: '{text}'."
             )
             return
 
@@ -676,12 +759,16 @@ async def any_voice_handler(
 
         if op.status == "pending":
             categories = category_repo.list_active()
+            log_event(f"Голосовая операция пользователя {tg_user_id} сохранена как pending.")
             await message.answer(
                 f"Распознал: \"{text}\".\nУточните категорию:",
                 reply_markup=build_categories_keyboard(categories),
             )
             return
 
+        log_event(
+            f"Голосовая операция пользователя {tg_user_id} сохранена: {op.op_date}, {op.category}, {op.amount} ₽."
+        )
         await message.answer(f"Записал ✅ {op.op_date} · {op.category} · {op.amount} ₽")
 
     finally:
@@ -723,6 +810,10 @@ async def category_callback_handler(
     amount = summary.get("amount", "")
 
     journal_repo.update_pending_category(row_index=row_index, category=category_name, category_id=category_id)
+    log_event(
+        f"Пользователь {tg_user_id} подтвердил pending-категорию: {category_name} "
+        f"для записи #{row_index}."
+    )
 
     await callback.answer()
 

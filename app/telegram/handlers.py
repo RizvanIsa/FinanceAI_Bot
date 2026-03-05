@@ -26,7 +26,6 @@ from app.sheets.journal_repo import JournalRepo
 from app.telegram.keyboards import build_categories_keyboard
 from app.telegram.states import EditJournalStates
 from app.sheets.category_repo import CategoryRepo
-from app.sheets.journal_repo import JournalRepo
 
 router = Router()
 
@@ -101,6 +100,41 @@ async def edit_flash_message(
     await asyncio.sleep(seconds)
 
 
+async def edit_replace_with_success_then_actions(
+    message: Message,
+    state: FSMContext,
+    journal_repo: JournalRepo,
+    row_index: int,
+    success_text: str,
+    seconds: float = 2.0,
+) -> None:
+    """
+    Для ввода даты/суммы текстом:
+    1) удаляем старое /edit-сообщение бота,
+    2) отправляем новое "успешно обновлено" под сообщением пользователя,
+    3) через паузу заменяем его обратно на меню действий.
+    """
+    data = await state.get_data()
+    menu_message_id = data.get("menu_message_id")
+    chat_id = data.get("menu_chat_id") or message.chat.id
+
+    if menu_message_id and chat_id:
+        try:
+            await message.bot.delete_message(chat_id=chat_id, message_id=menu_message_id)
+        except Exception:
+            # Если сообщение уже удалено/недоступно - продолжаем без падения.
+            pass
+
+    sent = await message.answer(success_text, parse_mode="HTML")
+    await state.update_data(
+        menu_message_id=sent.message_id,
+        menu_chat_id=sent.chat.id,
+    )
+
+    await asyncio.sleep(seconds)
+    await edit_render_actions(sent, journal_repo, state, row_index=row_index)
+
+
 async def edit_render_actions(
     callback_or_message: object,
     journal_repo: JournalRepo,
@@ -168,7 +202,35 @@ async def edit_render_actions(
 
 @router.message(CommandStart())
 async def start_handler(message: Message) -> None:
-    await message.answer("Я жив ✅")
+    await message.answer(
+        "👋 Привет! Я Finbot.\n\n"
+        "Помогаю вести учёт личных финансов в Google Sheets прямо из этого чата.\n\n"
+        "Отправьте мне расход или доход, например:\n"
+        "• продукты 3000 вчера\n"
+        "• зарплата 120000 5 числа\n\n"
+        "Подробная справка: /help"
+    )
+
+
+@router.message(Command("help"))
+async def help_handler(message: Message) -> None:
+    text = (
+        "<b>Finbot — учёт личных финансов в Google Sheets</b>\n\n"
+        "Я записываю ваши доходы и расходы в таблицу. Что я умею:\n\n"
+        "<b>Как добавить запись</b>\n"
+        "Просто напишите сообщение в чате, например:\n"
+        "• продукты 3000 вчера\n"
+        "• такси 550 сегодня\n"
+        "• зарплата 120000 5 числа\n\n"
+        "Можно отправлять и голосовые сообщения — я попробую распознать текст и сумму.\n\n"
+        "<b>Если я не уверен в категории</b>\n"
+        "Я помечу операцию как “требует уточнения” и попрошу выбрать категорию кнопками.\n\n"
+        "<b>Как исправить запись</b>\n"
+        "Команда /edit — открыть меню редактирования последних операций.\n"
+        "Там можно изменить дату, сумму, категорию или отменить запись.\n\n"
+        "Если что-то работает не так — просто напишите мне ещё одно сообщение с корректной суммой."
+    )
+    await message.answer(text, parse_mode="HTML")
 
 
 # ----------------------------
@@ -251,11 +313,14 @@ async def edit_choose_action(
         await state.set_state(EditJournalStates.choosing_category)
 
     elif action == "cancel":
-            await callback.message.edit_text(
+        await callback.message.edit_text(
             "Вы уверены, что хотите отменить запись?",
             reply_markup=build_edit_cancel_confirm_keyboard(),
         )
-    await state.set_state(EditJournalStates.confirming_cancel)
+        await state.set_state(EditJournalStates.confirming_cancel)
+    else:
+        await callback.answer("Неизвестное действие", show_alert=True)
+        return
 
     await callback.answer()
 
@@ -282,8 +347,14 @@ async def edit_waiting_amount(
     res = journal_repo.update_amount(row_index=row_index, amount=amount)
     print("✅ edit update_amount:", res)
 
-    await edit_flash_message(message, state, f"✅ Сумма обновлена: <b>{amount}</b> ₽")
-    await edit_render_actions(message, journal_repo, state, row_index=row_index)
+    await edit_replace_with_success_then_actions(
+        message=message,
+        state=state,
+        journal_repo=journal_repo,
+        row_index=row_index,
+        success_text=f"✅ Сумма обновлена: <b>{amount}</b> ₽",
+        seconds=2.0,
+    )
 
 
 @router.message(StateFilter(EditJournalStates.waiting_date), F.text)
@@ -326,9 +397,15 @@ async def edit_waiting_date(
     month_key = dt.strftime("%Y-%m")
     res = journal_repo.update_date_and_month_key(row_index=row_index, op_date=op_date, month_key=month_key)
     print("✅ edit update_date:", res)
-    
-    await edit_flash_message(message, state, f"✅ Дата обновлена: {op_date}")
-    await edit_render_actions(message, journal_repo, state, row_index=row_index)
+
+    await edit_replace_with_success_then_actions(
+        message=message,
+        state=state,
+        journal_repo=journal_repo,
+        row_index=row_index,
+        success_text=f"✅ Дата обновлена: {op_date}",
+        seconds=2.0,
+    )
 
 
 @router.callback_query(F.data.startswith("editcat:"))

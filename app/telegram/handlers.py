@@ -263,18 +263,11 @@ async def feedback_capture(message: Message, state: FSMContext) -> None:
         raw_name = " ".join(filter(None, [user.first_name, user.last_name]))
         username = user.username or raw_name or None
 
-    recent_events = append_feedback_entry(user_id=tg_user_id, username=username, description=text)
+    append_feedback_entry(user_id=tg_user_id, username=username, description=text)
     snippet_hint = text if len(text) <= 80 else f"{text[:77]}..."
     log_event(f"Пользователь {tg_user_id} отправил фидбек: {snippet_hint}")
 
-    await message.answer(
-        "Спасибо, описание сохранено в `logs/feedback.log`. Мы приложили последние записи логов и разберёмся.",
-        parse_mode="Markdown",
-    )
-
-    if recent_events:
-        snippet = "\n".join(recent_events[-5:])
-        await message.answer(f"Последние события:\n```\n{snippet}\n```", parse_mode="Markdown")
+    await message.answer("Спасибо, описание сохранено. Разберёмся и дам знать.")
 
     await state.clear()
 

@@ -2,6 +2,7 @@ import asyncio
 
 from app.config import get_settings
 from app.data.category_templates import DEFAULT_TEMPLATE
+from app.event_log import clear_event_log, log_event, setup_event_log
 from app.llm.client import LLMClient
 from app.services.transcribe_service import WhisperTranscriber
 from app.sheets.category_repo import CategoryRepo
@@ -13,15 +14,24 @@ from app.telegram.handlers import router
 
 
 async def main() -> None:
+    clear_event_log()
+    setup_event_log()
+    log_event("Бот запускается.")
+
     settings = get_settings()
+    log_event("Настройки загружены из .env.")
 
     bot = build_bot(settings.telegram_bot_token)
     dp = build_dispatcher()
     dp.include_router(router)
+    await bot.delete_webhook(drop_pending_updates=True)
+    log_event("Удалён webhook Telegram перед запуском polling.")
+    log_event("Telegram-бот и обработчики команд готовы.")
 
     # --- Google Sheets wiring (OAuth) ---
     creds = get_credentials(settings.google_oauth_client_path)
     sheets_client = SheetsClient(creds)
+    log_event("Подключение к Google Sheets успешно.")
 
     journal_repo = JournalRepo(
         sheets_client,
@@ -40,7 +50,7 @@ async def main() -> None:
     except Exception as e:
         # Не падаем, если недоступен Google Sheets при старте.
         # Категории уже могут быть созданы ранее; бот продолжит работу.
-        print("⚠️ CategoryRepo seed_if_empty failed:", repr(e))
+        log_event(f"Не удалось проверить/заполнить категории при старте: {repr(e)}")
     dp.workflow_data["category_repo"] = category_repo
 
     # --- LLM wiring ---
@@ -53,9 +63,13 @@ async def main() -> None:
                 model=settings.llm_model,
             )
         except Exception as e:
-            print("⚠️ LLM init failed, LLM disabled:", repr(e))
+            log_event(f"LLM не удалось инициализировать, работаем без него: {repr(e)}")
             llm = None
+    else:
+        log_event("LLM выключен в настройках. Будет использоваться режим pending.")
     dp.workflow_data["llm"] = llm
+    if llm is not None:
+        log_event("LLM подключен и готов к разбору сообщений.")
 
     # --- Whisper wiring (transcriber) ---
     transcriber = None
@@ -66,10 +80,13 @@ async def main() -> None:
             model=settings.whisper_model,
         )
     except Exception as e:
-        print("⚠️ Transcriber init failed:", repr(e))
+        log_event(f"Распознавание голоса недоступно: {repr(e)}")
         transcriber = None
     dp.workflow_data["transcriber"] = transcriber
+    if transcriber is not None:
+        log_event("Модуль распознавания голоса подключен.")
 
+    log_event("Бот запущен и ожидает сообщения в Telegram.")
     await dp.start_polling(bot)
 
 
@@ -77,4 +94,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("👋 Остановлено пользователем (Ctrl+C)")
+        log_event("Бот остановлен пользователем (Ctrl+C).")
+    finally:
+        pass

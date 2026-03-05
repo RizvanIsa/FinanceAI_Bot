@@ -24,9 +24,9 @@ from app.services.ingest_service import (
 )
 from app.services.transcribe_service import WhisperTranscriber
 from app.sheets.journal_repo import JournalRepo
+from app.sheets.category_repo import Category, CategoryRepo
 from app.telegram.keyboards import build_categories_keyboard
-from app.telegram.states import EditJournalStates, FeedbackStates
-from app.sheets.category_repo import CategoryRepo
+from app.telegram.states import EditJournalStates, FeedbackStates, CategoryEditStates
 from app.feedback import append_feedback_entry
 
 router = Router()
@@ -71,6 +71,90 @@ def build_edit_cancel_confirm_keyboard() -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+async def edit_category_menu_text(
+    bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    try:
+        if markup:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=markup,
+            )
+        else:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+            )
+    except Exception:
+        pass
+
+
+def build_category_list_keyboard(categories: list[Category]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for category in categories:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=category.name,
+                    callback_data=f"catedit:select:{category.category_id}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="➕ Добавить категорию",
+                callback_data="catedit:add",
+            )
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="❌ Закрыть меню",
+                callback_data="catedit:close",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_category_list_text() -> str:
+    return "Список категорий. Нажмите на нужную, чтобы посмотреть доступные действия, или добавьте новую."
+
+
+def build_category_action_text(category_name: str) -> str:
+    return f"Возможные действия для категории «{category_name}»"
+
+
+def build_category_action_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Переименовать", callback_data="catedit:rename"),
+            ],
+            [
+                InlineKeyboardButton(text="Удалить", callback_data="catedit:delete"),
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data="catedit:back"),
+            ],
+        ]
+    )
+
+
+async def show_category_list(bot, chat_id: int, message_id: int, categories: list[Category]) -> None:
+    markup = build_category_list_keyboard(categories)
+    await edit_category_menu_text(bot, chat_id, message_id, build_category_list_text(), markup)
 
 
 def format_edit_card(op_date: str, category: str, amount: str) -> str:
@@ -224,19 +308,384 @@ async def help_handler(message: Message) -> None:
         "<b>Finbot — учёт личных финансов в Google Sheets</b>\n\n"
         "Я записываю ваши доходы и расходы в таблицу. Что я умею:\n\n"
         "<b>Как добавить запись</b>\n"
-        "Просто напишите сообщение в чате, например:\n"
+        "Просто напиши сообщение в чате, например:\n"
         "• продукты 3000 вчера\n"
         "• такси 550 сегодня\n"
-        "• зарплата 120000 5 числа\n\n"
-        "Можно отправлять и голосовые сообщения — я попробую распознать текст и сумму.\n\n"
+        "• зарплата 120000 5 часов\n\n"
+        "Можно отправлять и голосовые сообщения — я распознаю текст и записываю всё.\n\n"
         "<b>Если я не уверен в категории</b>\n"
-        "Я помечу операцию как “требует уточнения” и попрошу выбрать категорию кнопками.\n\n"
-        "<b>Как исправить запись</b>\n"
-        "Команда /edit — открыть меню редактирования последних операций.\n"
-        "Там можно изменить дату, сумму, категорию или отменить запись.\n\n"
-        "Если что-то работает не так — просто напишите мне ещё одно сообщение с корректной суммой."
+        "Я предложу выбрать категорию через кнопки.\n\n"
+        "<b>Редактировать операции</b>\n"
+        "Команда /edit открывает меню с последними 10 записями: поменять дату, сумму, категорию или отменить запись.\n\n"
+        "<b>Редактировать категории</b>\n"
+        "Команда /category открывает меню с текущими категориями. Можно переименовать любую, добавить новую или удалить ненужную — операции, уже записанные в эту категорию, останутся как есть.\n\n"
+        "<b>Обратная связь</b>\n"
+        "Команда /feedback сохраняет ваше описание и последние события, чтобы мы могли быстро изучить ситуацию.\n\n"
+        "Если что-то работает не так — просто отправь ещё одно сообщение с корректной суммой."
     )
     await message.answer(text, parse_mode="HTML")
+
+
+@router.message(Command("category"))
+async def category_menu(
+    message: Message,
+    category_repo: CategoryRepo,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    tg_user_id = message.from_user.id if message.from_user else 0
+    categories = category_repo.list_active()
+    if not categories:
+        await message.answer("Список категорий пока пуст. Добавьте новую через кнопку ниже.")
+        return
+
+    markup = build_category_list_keyboard(categories)
+    text = build_category_list_text()
+    sent = await message.answer(text, reply_markup=markup)
+    await state.set_state(CategoryEditStates.waiting_selection)
+    await state.update_data(
+        menu_message_id=sent.message_id,
+        menu_chat_id=sent.chat.id,
+        selected_category_id=None,
+        selected_category_name=None,
+        action=None,
+    )
+    log_event(f"Пользователь {tg_user_id} открыл меню редактирования категорий.")
+
+
+@router.callback_query(F.data.startswith("catedit:select:"))
+async def category_select(
+    callback: CallbackQuery,
+    category_repo: CategoryRepo,
+    state: FSMContext,
+) -> None:
+    category_id = callback.data.split(":", 2)[2]
+    category_name = category_repo.get_name_by_id(category_id) or "категорию"
+    data = await state.get_data()
+    bot = callback.message.bot
+    message_id = data.get("menu_message_id")
+    chat_id = data.get("menu_chat_id")
+    if chat_id and message_id:
+        await edit_category_menu_text(
+            bot,
+            chat_id,
+            message_id,
+            build_category_action_text(category_name),
+            build_category_action_keyboard(),
+        )
+    await state.set_state(CategoryEditStates.waiting_action)
+    await state.update_data(
+        selected_category_id=category_id,
+        selected_category_name=category_name,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "catedit:back")
+async def category_back(
+    callback: CallbackQuery,
+    category_repo: CategoryRepo,
+    state: FSMContext,
+) -> None:
+    categories = category_repo.list_active()
+    data = await state.get_data()
+    bot = callback.message.bot
+    message_id = data.get("menu_message_id")
+    chat_id = data.get("menu_chat_id")
+    if chat_id and message_id:
+        await show_category_list(bot, chat_id, message_id, categories)
+        await state.set_state(CategoryEditStates.waiting_selection)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "catedit:add")
+async def category_add_prompt(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    bot = callback.message.bot
+    chat_id = data.get("menu_chat_id")
+    message_id = data.get("menu_message_id")
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Назад", callback_data="catedit:back"),
+            ]
+        ]
+    )
+    if chat_id and message_id:
+        await edit_category_menu_text(
+            bot,
+            chat_id,
+            message_id,
+            "Напишите название новой категории — например «Подарки» или «Подписки».",
+            markup,
+        )
+    await state.set_state(CategoryEditStates.waiting_name)
+    await state.update_data(action="add")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "catedit:rename")
+async def category_action_rename(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    category_name = data.get("selected_category_name") or "категорию"
+    category_id = data.get("selected_category_id")
+    bot = callback.message.bot
+    menu_chat_id = data.get("menu_chat_id")
+    menu_message_id = data.get("menu_message_id")
+    rename_text = (
+        f"Отправьте новое название для категории «{category_name}». Это сменит только имя, операции останутся без изменений."
+    )
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Назад", callback_data="catedit:back"),
+            ]
+        ]
+    )
+    if menu_chat_id and menu_message_id:
+        await edit_category_menu_text(
+            bot,
+            menu_chat_id,
+            menu_message_id,
+            rename_text,
+            markup,
+        )
+    await state.set_state(CategoryEditStates.waiting_name)
+    await state.update_data(action="rename", category_id=category_id, old_name=category_name)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "catedit:delete")
+async def category_action_delete(
+    callback: CallbackQuery,
+    state: FSMContext,
+    category_repo: CategoryRepo,
+) -> None:
+    data = await state.get_data()
+    category_id = data.get("selected_category_id")
+    category_name = data.get("selected_category_name") or "категорию"
+    confirm_markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Подтвердить удаление",
+                    callback_data=f"catedit:confirm_delete:{category_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(text="Назад", callback_data="catedit:back"),
+            ],
+        ]
+    )
+    bot = callback.message.bot
+    data_state = await state.get_data()
+    menu_chat_id = data_state.get("menu_chat_id")
+    menu_message_id = data_state.get("menu_message_id")
+    if menu_chat_id and menu_message_id:
+        await edit_category_menu_text(
+            bot,
+            menu_chat_id,
+            menu_message_id,
+            (
+                f"Вы уверены, что хотите удалить категорию «{category_name}»?\n"
+                "Отключенные категории больше не будут отображаться, но прошлые записи остаются прежними."
+            ),
+            confirm_markup,
+        )
+    await state.set_state(CategoryEditStates.confirm_delete)
+    await state.update_data(action="delete", category_id=category_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "catedit:close")
+async def category_close_menu(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("catedit:confirm_delete:"))
+async def category_confirm_delete(
+    callback: CallbackQuery,
+    category_repo: CategoryRepo,
+    state: FSMContext,
+) -> None:
+    data = (callback.data or "").split(":", 2)
+    if len(data) < 3:
+        await callback.answer()
+        return
+
+    category_id = data[2]
+    category_name = category_repo.get_name_by_id(category_id) or "категорию"
+    try:
+        success = category_repo.deactivate_category(category_id)
+    except Exception as exc:
+        log_event(
+            f"Ошибка при удалении категории {category_id} от пользователя {callback.from_user.id if callback.from_user else 0}: {repr(exc)}"
+        )
+        await callback.message.answer("Не удалось удалить категорию. Попробуйте позже.")
+        await state.clear()
+        await callback.answer()
+        return
+
+    if not success:
+        await callback.message.answer("Категорию не удалось найти для удаления.")
+        await state.clear()
+        await callback.answer()
+        return
+
+    data_state = await state.get_data()
+    bot = callback.message.bot
+    menu_chat_id = data_state.get("menu_chat_id")
+    menu_message_id = data_state.get("menu_message_id")
+
+    if menu_chat_id and menu_message_id:
+        await edit_category_menu_text(
+            bot,
+            menu_chat_id,
+            menu_message_id,
+            f"Категория «{category_name}» удалена. Она больше не отображается в списке.",
+        )
+        categories = category_repo.list_active()
+        await show_category_list(bot, menu_chat_id, menu_message_id, categories)
+        await state.update_data(
+            selected_category_id=None,
+            selected_category_name=None,
+            action=None,
+        )
+        await state.set_state(CategoryEditStates.waiting_selection)
+    tg_user_id = callback.from_user.id if callback.from_user else 0
+    log_event(f"Пользователь {tg_user_id} удалил категорию {category_id}.")
+    await callback.answer()
+
+
+@router.message(StateFilter(CategoryEditStates.waiting_name), F.text)
+async def category_edit_name(
+    message: Message,
+    category_repo: CategoryRepo,
+    state: FSMContext,
+) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Название категории не может быть пустым. Напишите новое название.")
+        return
+    if text.startswith("/"):
+        await message.answer(
+            "Команды не обрабатываются во время редактирования категорий. "
+            "Нажмите ❌ Закрыть меню и повторите позже."
+        )
+        return
+
+    data = await state.get_data()
+    action = data.get("action")
+    tg_user_id = message.from_user.id if message.from_user else 0
+
+    if action == "rename":
+        category_id = data.get("category_id")
+        if not category_id:
+            await message.answer("Не удалось определить категорию, начните заново.")
+            await state.clear()
+            return
+
+        try:
+            success = category_repo.update_name(category_id=category_id, new_name=text)
+        except Exception as exc:
+            log_event(
+                f"Ошибка при переименовании категории {category_id} от пользователя {tg_user_id}: {repr(exc)}"
+            )
+            await message.answer("Не удалось сохранить новое название. Попробуйте позже.")
+            await state.clear()
+            return
+
+        if not success:
+            await message.answer("Категорию не удалось обновить. Попробуйте ещё раз.")
+            await state.clear()
+            return
+
+        data_state = await state.get_data()
+        bot = message.bot
+        menu_chat_id = data_state.get("menu_chat_id")
+        menu_message_id = data_state.get("menu_message_id")
+        if menu_chat_id and menu_message_id:
+            await edit_category_menu_text(
+                bot,
+                menu_chat_id,
+                menu_message_id,
+                f"Название категории обновлено на «{text}». Все старые записи остались в прежней категории.",
+            )
+            categories = category_repo.list_active()
+            await show_category_list(bot, menu_chat_id, menu_message_id, categories)
+            await state.update_data(
+                selected_category_id=None,
+                selected_category_name=None,
+                action=None,
+            )
+            await state.set_state(CategoryEditStates.waiting_selection)
+
+        if message.from_user:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+        log_event(f"Пользователь {tg_user_id} переименовал категорию {category_id} в «{text}».")
+
+    elif action == "add":
+        try:
+            new_id = category_repo.add_category(name=text)
+        except ValueError:
+            await message.answer("Название не может быть пустым. Напишите другое.")
+            return
+        except Exception as exc:
+            log_event(
+                f"Ошибка при добавлении категории от пользователя {tg_user_id}: {repr(exc)}"
+            )
+            await message.answer("Не удалось создать категорию. Попробуйте позже.")
+            await state.clear()
+            return
+
+        data_state = await state.get_data()
+        bot = message.bot
+        menu_chat_id = data_state.get("menu_chat_id")
+        menu_message_id = data_state.get("menu_message_id")
+        if menu_chat_id and menu_message_id:
+            await edit_category_menu_text(
+                bot,
+                menu_chat_id,
+                menu_message_id,
+                f"Категория «{text}» добавлена.",
+            )
+            categories = category_repo.list_active()
+            await show_category_list(bot, menu_chat_id, menu_message_id, categories)
+            await state.update_data(
+                selected_category_id=None,
+                selected_category_name=None,
+                action=None,
+            )
+            await state.set_state(CategoryEditStates.waiting_selection)
+
+        if message.from_user:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+
+        log_event(f"Пользователь {tg_user_id} добавил новую категорию «{text}» ({new_id}).")
+
+    else:
+        await message.answer("Неподдерживаемая операция. Начните меню заново.")
+
 
 
 @router.message(Command("feedback"))

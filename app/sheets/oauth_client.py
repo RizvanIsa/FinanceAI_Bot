@@ -1,6 +1,7 @@
 import os
 from typing import Sequence
 
+from google.auth import exceptions as google_exceptions
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -32,10 +33,15 @@ def get_credentials(
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            # Авто-обновление токена
-            creds.refresh(Request())
-        else:
-            # Первый вход через браузер
+            try:
+                # Попробуем авто-обновление токена
+                creds.refresh(Request())
+            except google_exceptions.RefreshError:
+                # Если refresh не удался (expired / revoked) — принудительно переавторизуемся
+                creds = None
+
+        if not creds:
+            # Первый вход или форс-переавторизация через браузер
             flow = InstalledAppFlow.from_client_secrets_file(client_secret_path, scopes)
             creds = flow.run_local_server(port=0)
 

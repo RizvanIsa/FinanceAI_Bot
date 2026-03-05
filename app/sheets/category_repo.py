@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import uuid
 from typing import Optional
 
 from app.sheets.client import SheetsClient
@@ -103,6 +104,77 @@ class CategoryRepo:
             nm = str(r[1]).strip().lower()
             if cid and nm == target:
                 return cid
+
+    def _find_row_index(self, category_id: str) -> Optional[int]:
+        if not category_id:
+            return None
+        rows = self.client.get_values(self.spreadsheet_id, self.sheet_name, "A:A")
+        if not rows:
+            return None
+        for idx, row in enumerate(rows, start=1):
+            if idx == 1:
+                continue
+            if not row:
+                continue
+            if str(row[0]).strip() == category_id:
+                return idx
+        return None
+
+    def _next_order(self, section: str) -> int:
+        section = (section or "custom").strip()
+        current = self.list_active()
+        max_order = 0
+        for cat in current:
+            if cat.section == section and isinstance(cat.order, int):
+                max_order = max(max_order, cat.order)
+        return max_order + 10
+
+    def update_name(self, category_id: str, new_name: str) -> bool:
+        if not category_id or not new_name:
+            return False
+        row_idx = self._find_row_index(category_id)
+        if row_idx is None:
+            return False
+        self.client.batch_update_values(
+            self.spreadsheet_id,
+            [(f"{self.sheet_name}!B{row_idx}", [[new_name.strip()]])],
+        )
+        return True
+
+    def deactivate_category(self, category_id: str) -> bool:
+        row_idx = self._find_row_index(category_id)
+        if row_idx is None:
+            return False
+        self.client.batch_update_values(
+            self.spreadsheet_id,
+            [(f"{self.sheet_name}!E{row_idx}", [["FALSE"]])],
+        )
+        return True
+
+    def add_category(
+        self,
+        name: str,
+        section: str = "custom",
+        order: Optional[int] = None,
+        is_active: bool = True,
+    ) -> str:
+        normalized_name = (name or "").strip()
+        if not normalized_name:
+            raise ValueError("Category name cannot be empty")
+        category_id = f"user_{uuid.uuid4().hex[:8]}"
+        final_order = order if order is not None else self._next_order(section)
+        self.client.append_row(
+            self.spreadsheet_id,
+            self.sheet_name,
+            [
+                category_id,
+                normalized_name,
+                section or "custom",
+                str(final_order),
+                "TRUE" if is_active else "FALSE",
+            ],
+        )
+        return category_id
         return None
 
     def seed_if_empty(self, rows: list[dict]) -> None:

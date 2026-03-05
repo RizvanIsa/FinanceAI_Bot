@@ -2,13 +2,20 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class EditJournalStates(StatesGroup):
-    selecting_row = State()        # РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РІС‹Р±РёСЂР°РµС‚ Р·Р°РїРёСЃСЊ РёР· СЃРїРёСЃРєР°
-    choosing_action = State()      # РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РІС‹Р±РёСЂР°РµС‚, С‡С‚Рѕ РјРµРЅСЏС‚СЊ
-    waiting_amount = State()       # Р¶РґРµРј РІРІРѕРґР° СЃСѓРјРјС‹ С‚РµРєСЃС‚РѕРј
-    waiting_date = State()         # Р¶РґРµРј РІРІРѕРґР° РґР°С‚С‹ С‚РµРєС‚РѕРј
-    choosing_category = State()    # Р¶РґРµРј РІС‹Р±РѕСЂ РєР°С‚РµРіРѕСЂРёРё РєРЅРѕРїРєРѕР№ (РєР°Рє pending)
-    confirming_cancel = State()    # РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ РѕС‚РјРµРЅС‹
+    selecting_row = State()        # Пользователь выбирает запись из списка
+    choosing_action = State()      # Пользователь выбирает действие редактирования
+    waiting_amount = State()       # Ввод суммы
+    waiting_date = State()         # Ввод даты
+    choosing_category = State()    # Выбор категории через клавиатуру
+    confirming_cancel = State()    # Подтверждение отмены
 
 
 class FeedbackStates(StatesGroup):
-    waiting_text = State()  # РїРѕР»СѓС‡Р°РµРј РѕРїРёСЃР°РЅРёРµ РѕС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ
+    waiting_text = State()  # Ждём описание ошибки от пользователя
+
+
+class CategoryEditStates(StatesGroup):
+    waiting_selection = State()  # Пользователь выбирает категорию
+    waiting_action = State()     # Пользователь видит возможные действия
+    waiting_name = State()       # Ждём новое имя для категории или имя новой категории
+    confirm_delete = State()     # Подтверждение удаления категории

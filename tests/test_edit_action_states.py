@@ -34,6 +34,7 @@ class _FakeCallback:
         self.data = data
         self.message = _FakeMessage()
         self.answer_calls = []
+        self.from_user = type("FakeUser", (), {"id": 1})()
 
     async def answer(self, text=None, show_alert=False):
         self.answer_calls.append({"text": text, "show_alert": show_alert})

@@ -1,13 +1,14 @@
-from datetime import datetime, timedelta
-from typing import Dict, Any
+from datetime import datetime
+from typing import Dict, Any, Iterable
 
+from app.data.category_templates import DEFAULT_TEMPLATE
 from app.llm.client import LLMClient
-from app.llm.prompts import CATEGORIES
 
+DEFAULT_CATEGORY_NAMES = [row["name"] for row in DEFAULT_TEMPLATE]
 
-SYSTEM_PROMPT = f"""
-Ты парсер финансовых операций для телеграм-бота.
-Тебе приходит короткое сообщение пользователя (иногда с сокращениями: 12к, 200k, "две тысячи").
+SYSTEM_PROMPT_TEMPLATE = """
+Результат запроса Finbot для телеграм-бота.
+Тебе приходит короткое сообщение пользователя (иногда с скобками: 12к, 200k, "две тысячи").
 Нужно вернуть ТОЛЬКО JSON по схеме:
 
 {{
@@ -18,7 +19,7 @@ SYSTEM_PROMPT = f"""
 }}
 
 Разрешенные категории (строго выбирать из списка):
-{CATEGORIES}
+{categories_section}
 
 Правила:
 - Если категория не очевидна или подходит несколько, ставь category="" и needs_review=true
@@ -30,19 +31,37 @@ SYSTEM_PROMPT = f"""
 """.strip()
 
 
+def _build_categories_section(category_names: Iterable[str] | None) -> str:
+    seen: list[str] = []
+    source = list(category_names or [])
+    if not source:
+        source = [name for name in DEFAULT_CATEGORY_NAMES if name]
+    for name in source:
+        normalized = (name or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.append(normalized)
+    if not seen:
+        seen = [name for name in DEFAULT_CATEGORY_NAMES if name]
+    return "\n".join(f"- {name}" for name in seen)
+
+
 def parse_operation_with_gpt(
     llm: LLMClient,
     text: str,
     today: datetime,
+    category_names: Iterable[str] | None = None,
 ) -> Dict[str, Any]:
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+        categories_section=_build_categories_section(category_names)
+    )
     user_prompt = f"""
 today={today.strftime("%Y-%m-%d")}
 text={text}
 """.strip()
 
-    result = llm.chat_json(system=SYSTEM_PROMPT, user=user_prompt)
+    result = llm.chat_json(system=system_prompt, user=user_prompt)
 
-    # минимальная нормализация/страховка типов
     op_date = str(result.get("op_date", today.strftime("%Y-%m-%d")))
     amount = result.get("amount", 0)
     try:
@@ -53,5 +72,4 @@ text={text}
     category = str(result.get("category", "")).strip()
     needs_review = bool(result.get("needs_review", False))
 
-    # финальный dict
     return {"op_date": op_date, "amount": amount, "category": category, "needs_review": needs_review}

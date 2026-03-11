@@ -5,12 +5,28 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _parse_admin_user_ids(value: str) -> tuple[int, ...]:
+    if not value:
+        return ()
+    result: list[int] = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            result.append(int(part))
+        except ValueError:
+            continue
+    return tuple(result)
+
+
 @dataclass(frozen=True)
 class Settings:
     # Telegram
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    bot_owner_ids: tuple[int, ...] = _parse_admin_user_ids(os.getenv("BOT_OWNER_IDS", ""))
 
-    # Timezone (пока используем позже)
+    # Timezone (пока используем пояс)
     app_timezone: str = os.getenv("APP_TIMEZONE", "Etc/GMT-5")
 
     # Google Sheets (OAuth)
@@ -25,16 +41,12 @@ class Settings:
     whisper_model: str = os.getenv("WHISPER_MODEL", "whisper-1")
 
 
-
-
 def get_settings() -> Settings:
     """
     Загружает настройки из .env и проверяет обязательные поля.
     """
     s = Settings()
 
-    # Telegram обязателен для запуска бота, но не обязателен для smoke-теста Sheets.
-    # Поэтому тут не валим проект, если токена нет.
     if not s.telegram_bot_token:
         # Оставляем предупреждение на будущее, но не падаем.
         pass

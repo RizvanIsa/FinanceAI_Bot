@@ -152,6 +152,23 @@ def build_category_action_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def resolve_category_from_list(raw_category: str, categories: list[Category]) -> tuple[str, str]:
+    candidate = (raw_category or "").strip()
+    if not candidate:
+        return "", ""
+
+    for category in categories:
+        if category.category_id == candidate:
+            return category.category_id, category.name
+
+    normalized = candidate.lower()
+    for category in categories:
+        if category.name.lower() == normalized:
+            return category.category_id, category.name
+
+    return "", candidate
+
+
 async def show_category_list(bot, chat_id: int, message_id: int, categories: list[Category]) -> None:
     markup = build_category_list_keyboard(categories)
     await edit_category_menu_text(bot, chat_id, message_id, build_category_list_text(), markup)
@@ -1027,6 +1044,9 @@ async def any_text_handler(
         return
 
     # пробуем GPT, но без риска упасть
+    categories = category_repo.list_active()
+    category_names = [c.name for c in categories]
+
     try:
         if llm is None:
             raise RuntimeError("LLM disabled or not configured")
@@ -1037,6 +1057,7 @@ async def any_text_handler(
             tg_user_id=tg_user_id,
             tg_message_id=tg_message_id,
             source="text",
+            category_names=category_names,
         )
 
     except Exception as e:
@@ -1053,28 +1074,21 @@ async def any_text_handler(
             tg_message_id=tg_message_id,
             source="text",
         )
+
     if op.status == "ok":
-        cid = category_repo.find_id_by_name(op.category)
-        if cid:
-            op.category_id = cid
+        resolved_id, resolved_name = resolve_category_from_list(op.category, categories)
+        if resolved_id:
+            op.category_id = resolved_id
+            op.category = resolved_name
         else:
-            # если категория не найдена в справочнике - отправляем в pending
             op.status = "pending"
             op.needs_review = "TRUE"
+            op.category = ""
+            op.category_id = ""
 
-        # Если GPT отдал ok - проставляем category_id по справочнику.
-        if op.status == "ok":
-            cid = category_repo.find_id_by_name(op.category)
-            if cid:
-                op.category_id = cid
-            else:
-                op.status = "pending"
-                op.needs_review = "TRUE"
-                op.category = ""
     journal_repo.append_operation(op)
 
     if op.status == "pending":
-        categories = category_repo.list_active()
         log_event(
             f"Операция пользователя {tg_user_id} сохранена как pending. Ожидается выбор категории."
         )
@@ -1132,6 +1146,8 @@ async def any_voice_handler(
         try:
             tr = transcriber.transcribe_ogg(file_path)
             text = tr.text.strip()
+            log_text = text if len(text) <= 200 else f"{text[:200]}..."
+            log_event(f"Распознан голосовой текст от {tg_user_id}: {log_text}")
         except Exception as e:
             log_event(f"Ошибка распознавания голоса у пользователя {tg_user_id}: {repr(e)}")
             await message.answer(
@@ -1148,6 +1164,9 @@ async def any_voice_handler(
             log_event(f"Голос пользователя {tg_user_id} не удалось распознать в текст.")
             return
 
+        categories = category_repo.list_active()
+        category_names = [c.name for c in categories]
+
         try:
             if llm is None:
                 raise RuntimeError("LLM disabled or not configured")
@@ -1158,6 +1177,7 @@ async def any_voice_handler(
                 tg_user_id=tg_user_id,
                 tg_message_id=tg_message_id,
                 source="voice",
+                category_names=category_names,
             )
         except Exception as e:
             log_event(
@@ -1186,21 +1206,20 @@ async def any_voice_handler(
             )
             return
 
-        # Если GPT отдал ok - проставляем category_id по справочнику
         if op.status == "ok":
-            cid = category_repo.find_id_by_name(op.category)
-            if cid:
-                op.category_id = cid
+            resolved_id, resolved_name = resolve_category_from_list(op.category, categories)
+            if resolved_id:
+                op.category_id = resolved_id
+                op.category = resolved_name
             else:
-                # GPT вернул категорию, которой нет в справочнике -> pending
                 op.status = "pending"
                 op.needs_review = "TRUE"
                 op.category = ""
+                op.category_id = ""
 
         journal_repo.append_operation(op)
 
         if op.status == "pending":
-            categories = category_repo.list_active()
             log_event(f"Голосовая операция пользователя {tg_user_id} сохранена как pending.")
             await message.answer(
                 f"Распознал: \"{text}\".\nУточните категорию:",

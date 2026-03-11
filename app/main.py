@@ -9,6 +9,7 @@ from app.sheets.category_repo import CategoryRepo
 from app.sheets.client import SheetsClient
 from app.sheets.journal_repo import JournalRepo
 from app.sheets.oauth_client import get_credentials
+from app.telegram.admin import AdminOnlyMiddleware
 from app.telegram.bot import build_bot, build_dispatcher
 from app.telegram.handlers import router
 
@@ -23,6 +24,9 @@ async def main() -> None:
 
     bot = build_bot(settings.telegram_bot_token)
     dp = build_dispatcher()
+    admin_middleware = AdminOnlyMiddleware(settings.bot_owner_ids)
+    router.message.middleware(admin_middleware)
+    router.callback_query.middleware(admin_middleware)
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
     log_event("Удалён webhook Telegram перед запуском polling.")

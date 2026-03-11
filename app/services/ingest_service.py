@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+from typing import Iterable
 
 from app.models.operation import Operation
 
@@ -65,11 +66,17 @@ def build_operation_from_text_with_gpt(
     tg_user_id: int,
     tg_message_id: int,
     source: str = "text",
+    category_names: Iterable[str] | None = None,
 ) -> Operation:
     now = datetime.now()
     created_at = now.strftime("%Y-%m-%d %H:%M:%S")
 
-    parsed = parse_operation_with_gpt(llm=llm, text=text, today=now)
+    parsed = parse_operation_with_gpt(
+        llm=llm,
+        text=text,
+        today=now,
+        category_names=category_names,
+    )
 
     op_date = parsed["op_date"]  # YYYY-MM-DD
     month_key = op_date[:7] if len(op_date) >= 7 else now.strftime("%Y-%m")
